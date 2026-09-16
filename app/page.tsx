@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Check, Clock3, MapPin, Mic, Percent, ShieldCheck, ShoppingBag, Sparkles, Star, X } from "lucide-react";
 
 type PlatformQuote = { platform: "Zomato" | "Swiggy"; total: number; eta: string; food: number; fees: number; discount: number };
@@ -29,14 +29,77 @@ export default function Home() {
   const [cartOpen, setCartOpen] = useState(false);
   const [location, setLocation] = useState("Hyderabad");
   const [toast, setToast] = useState("");
+  const [listening, setListening] = useState(false);
+  const [voiceLanguage, setVoiceLanguage] = useState("en-IN");
+  const recognitionRef = useRef<any>(null);
+
+  const showToast = (message: string, duration = 2200) => {
+    setToast(message);
+    window.setTimeout(() => setToast(""), duration);
+  };
 
   const runSearch = (text = query) => {
     setQuery(text);
     setSubmitted(true);
     setSelected(null);
     setOptimized(false);
-    setToast("Comparing Zomato, Swiggy, totals, offers, ETA and reviews…");
-    window.setTimeout(() => setToast(""), 1800);
+    showToast("Comparing Zomato, Swiggy, totals, offers, ETA and reviews…", 1800);
+  };
+
+  const startVoiceSearch = () => {
+    if (listening) {
+      recognitionRef.current?.stop();
+      return;
+    }
+
+    const browserWindow = window as any;
+    const SpeechRecognition = browserWindow.SpeechRecognition || browserWindow.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      showToast("Voice search is not supported in this browser. Try Chrome or Edge.", 3500);
+      return;
+    }
+
+    const recognition = new SpeechRecognition();
+    recognition.lang = voiceLanguage;
+    recognition.interimResults = true;
+    recognition.continuous = false;
+    recognition.maxAlternatives = 1;
+    recognitionRef.current = recognition;
+
+    recognition.onstart = () => {
+      setListening(true);
+      showToast("Listening… Tell IFD what you want.", 5000);
+    };
+
+    recognition.onresult = (event: any) => {
+      let transcript = "";
+      for (let i = event.resultIndex; i < event.results.length; i += 1) {
+        transcript += event.results[i][0].transcript;
+      }
+      transcript = transcript.trim();
+      if (transcript) setQuery(transcript);
+      if (event.results[event.results.length - 1]?.isFinal && transcript) {
+        runSearch(transcript);
+      }
+    };
+
+    recognition.onerror = (event: any) => {
+      setListening(false);
+      if (event?.error === "not-allowed") showToast("Microphone permission is blocked. Allow microphone access and try again.", 3500);
+      else showToast("I couldn't hear that. Try again.", 2500);
+    };
+
+    recognition.onend = () => {
+      setListening(false);
+      recognitionRef.current = null;
+    };
+
+    try {
+      recognition.start();
+    } catch {
+      setListening(false);
+      showToast("Voice search could not start. Try again.", 2500);
+    }
   };
 
   const choose = (item: FoodOption) => {
@@ -60,7 +123,16 @@ export default function Home() {
             <p>Tell us your food, budget, taste and timing. IFD compares Zomato and Swiggy and shows the actual choice worth making.</p>
             <div className="searchbox">
               <input value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => e.key === "Enter" && runSearch()} placeholder="Try: chicken biryani for 2, under ₹1,000, within 30 minutes" />
-              <div className="search-actions"><button className="ghost" aria-label="Voice search"><Mic size={18} /></button><button className="primary" onClick={() => runSearch()}>Compare my food</button></div>
+              <div className="search-actions">
+                <button className={`ghost ${listening ? "voice-active" : ""}`} aria-label={listening ? "Stop voice search" : "Voice search"} title={listening ? "Stop listening" : "Speak your order"} onClick={startVoiceSearch}><Mic size={18} />{listening && <span className="voice-dot" />}</button>
+                <button className="primary" onClick={() => runSearch()}>Compare my food</button>
+              </div>
+            </div>
+            <div className="voice-row">
+              <span>{listening ? "Listening…" : "Speak naturally"}</span>
+              <button className={voiceLanguage === "en-IN" ? "voice-lang active" : "voice-lang"} onClick={() => setVoiceLanguage("en-IN")}>English</button>
+              <button className={voiceLanguage === "hi-IN" ? "voice-lang active" : "voice-lang"} onClick={() => setVoiceLanguage("hi-IN")}>हिन्दी</button>
+              <button className={voiceLanguage === "te-IN" ? "voice-lang active" : "voice-lang"} onClick={() => setVoiceLanguage("te-IN")}>తెలుగు</button>
             </div>
             <div className="chips">{["Chicken biryani for 2", "Something spicy", "Best value under ₹500", "Surprise me"].map((chip) => <button className="chip" key={chip} onClick={() => runSearch(chip)}>{chip}</button>)}</div>
             <div className="trust"><span><Check size={16} /> Zomato + Swiggy</span><span><Percent size={16} /> Deal optimization</span><span><Clock3 size={16} /> ETA-aware</span><span><ShieldCheck size={16} /> Verified reviews</span></div>
@@ -79,7 +151,7 @@ export default function Home() {
         <Results query={query} options={options} onChoose={choose} optimized={optimized} setOptimized={setOptimized} />
       )}
 
-      {cartOpen && selected && <Cart selected={selected} optimized={optimized} onClose={() => setCartOpen(false)} onToast={setToast} />}
+      {cartOpen && selected && <Cart selected={selected} optimized={optimized} onClose={() => setCartOpen(false)} onToast={showToast} />}
       {toast && <div className="toast">{toast}</div>}
       <footer className="footer">IFD · India Food Delivery · Prototype. Live platform data, coupons and cart handoff require legitimate data sources and authorized integrations.</footer>
     </div>
@@ -94,9 +166,7 @@ function Results({ query, options, onChoose, optimized, setOptimized }: { query:
       <p>Request: <strong>{query || "Chicken biryani for 2, under ₹1,000, within 30 minutes"}</strong></p>
     </section>
     <section className="section" style={{ paddingTop: 8 }}>
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 18 }}>
-        <span className="tag orange">Zomato</span><span className="tag">Swiggy</span><span className="tag">Final total comparison</span>
-      </div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 18 }}><span className="tag orange">Zomato</span><span className="tag">Swiggy</span><span className="tag">Final total comparison</span></div>
       <div className="grid">
         {options.map((item) => {
           const cheapest = [...item.quotes].sort((a, b) => a.total - b.total)[0];
@@ -107,21 +177,17 @@ function Results({ query, options, onChoose, optimized, setOptimized }: { query:
             <div className="restaurant">{item.restaurant}</div>
             <div className="meta"><Star size={14} fill="currentColor" style={{ verticalAlign: "-2px" }} /> {item.rating} · {item.reviews.toLocaleString()} verified signals</div>
             <div className="item">{item.item}</div>
-
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 18 }}>
               {item.quotes.map((quote) => {
                 const isBest = quote.platform === cheapest.platform;
                 return <div key={quote.platform} style={{ border: isBest ? "2px solid #171717" : "1px solid #e9e4dc", borderRadius: 16, padding: 14, background: isBest ? "#faf7f2" : "#fff" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-                    <strong>{quote.platform}</strong>{isBest && <span style={{ fontSize: 11, fontWeight: 800 }}>✓ BEST</span>}
-                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}><strong>{quote.platform}</strong>{isBest && <span style={{ fontSize: 11, fontWeight: 800 }}>✓ BEST</span>}</div>
                   <div style={{ fontSize: 25, fontWeight: 800, marginTop: 8 }}>₹{quote.total}</div>
                   <div className="meta" style={{ marginTop: 3 }}>{quote.eta}</div>
                   <div style={{ fontSize: 12, color: "#766f67", marginTop: 10 }}>Food ₹{quote.food} · Fees ₹{quote.fees} · Offer -₹{quote.discount}</div>
                 </div>;
               })}
             </div>
-
             <div className="save" style={{ marginTop: 14 }}>₹{saving} cheaper on {cheapest.platform}<span>vs. {other.platform}</span></div>
             <div className="why"><strong>Why this?</strong><br />{item.why}</div>
             <button className="primary" onClick={() => onChoose(item)}>Choose {cheapest.platform}</button>
@@ -129,7 +195,6 @@ function Results({ query, options, onChoose, optimized, setOptimized }: { query:
           </article>;
         })}
       </div>
-
       <section className="max">
         <div><div className="eyebrow" style={{ background: "#2a211d", color: "#ff9f72" }}>IFD MAX™</div><h3>Make my order better.</h3><p>Don’t stop at finding a good platform. Let IFD test cart changes and offers to find a better outcome.</p><button className="primary" onClick={() => setOptimized(true)}>{optimized ? "Optimized ✓" : "Optimize this order"}</button></div>
         <div className="deal"><div><span>Current best total</span><strong>₹438</strong></div><div><span>Add Coke ₹40</span><strong>+₹40</strong></div><div><span>Unlock promotion</span><strong>-₹100</strong></div><div className="total"><span>Optimized total</span><strong>₹378</strong></div></div>
